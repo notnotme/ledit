@@ -13,9 +13,9 @@
 #include <Windows.h>
 #endif
 #include "la.h"
-#include "glad.h"
-#include "../third-party/glfw/include/GLFW/glfw3.h"
-#include "../third-party/freetype2/include/ft2build.h"
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+#include <ft2build.h>
 #include FT_FREETYPE_H
 #include "state.h"
 #include "shader.h"
@@ -346,10 +346,16 @@ int main(int argc, char** argv) {
     auto maxRenderWidth = 0;
     while (!glfwWindowShouldClose(window))
     {
+#ifndef __SWITCH__
+      // CPU usage stay at 100%. on Nintendo Switch, even by using
+      // glfwSwapBuffers(window); after glfwWaitEvents(); (GLFW Switch don't wait)
+      // CPU usage stay very low (1..6%) if we avoid doing this if case below.
       if(state.cacheValid) {
         glfwWaitEvents();
         continue;
       }
+#endif
+
       bool changed = false;
       if(HEIGHT != state.HEIGHT || WIDTH != state.WIDTH || fontSize != state.fontSize) {
          WIDTH = state.WIDTH;

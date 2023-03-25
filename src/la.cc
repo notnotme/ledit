@@ -90,7 +90,7 @@ Vec2i vec2i_div(Vec2i a, Vec2i b)
 
 Vec4f vec4f(float x, float y, float z, float w)
 {
-    #ifdef _WIN32
+#ifdef _WIN32
     return {x,y,z,w};
 #else
     return (Vec4f) {

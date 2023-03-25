@@ -3,7 +3,7 @@
 
 #include <string>
 #include <codecvt>
-#ifdef __linux__
+#if defined __linux__ || defined __SWITCH__
 #include <locale>
 #endif
 typedef union char_s {

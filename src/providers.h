@@ -4,7 +4,7 @@
 #include <filesystem>
 #include "la.h"
 #include "utils.h"
-#include "../third-party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #ifndef _WIN32
 #include <signal.h>
 #include <unistd.h>
@@ -17,6 +17,12 @@ struct FontEntry {
   std::string name;
   std::string type;
 };
+#endif
+#ifdef __SWITCH__
+long pathconf(const char *pathname, int varcode) {
+  //stub
+  return 0L;
+}
 #endif
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -82,7 +88,7 @@ public:
        branch += buffer;
      }
      _pclose(pipe);
-#else
+#elif !__SWITCH__
     int fd[2], pid;
     pipe(fd);
     pid = fork();
@@ -165,13 +171,13 @@ public:
     return e;
   }
   const std::string getDefaultFontPath() {
-#ifdef _WIN32
+#ifdef __SWITCH__
+    return (getDefaultFontDir() / "CONSOLA.TTF").generic_string();
+#elif _WIN32
     return (getDefaultFontDir() / "consola.ttf").generic_string();
-#endif
-#ifdef __APPLE__
+#elif __APPLE__
     return (getDefaultFontDir() / "Monaco.ttf").generic_string();
-#endif
-#ifdef __linux__
+#elif __linux__
   FcConfig* config = FcInitLoadConfigAndFonts();
   FcPattern* pat = FcPatternCreate();
   FcObjectSet* objectSet = FcObjectSetBuild(FC_FAMILY, FC_STYLE, FC_LANG, FC_FILE, FC_SPACING, nullptr);
@@ -207,9 +213,10 @@ public:
 // no idea how to do this differently
 #ifdef _WIN32
   return "C:\\Windows\\Fonts";
-#endif
-#ifdef __APPLE__
+#elif __APPLE__
   return "/System/Library/Fonts";
+#elif __SWITCH__
+  return "/switch/ledit/fonts";
 #else
   // fontconfig used
   return "";

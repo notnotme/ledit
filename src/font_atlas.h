@@ -3,7 +3,7 @@
 #include <vector>
 #include "base64.h"
 #include "utils.h"
-#include "glad.h"
+#include <glad/glad.h>
 class FontAtlas {
 public:
   std::map<char16_t, CharacterEntry> entries;
