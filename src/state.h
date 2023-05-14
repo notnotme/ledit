@@ -25,7 +25,6 @@ class State {
   GLuint vao, vbo;
   bool focused = true;
   bool exitFlag = false;
-  bool cacheValid = false;
   GLuint sel_vao, sel_vbo;
   GLuint highlight_vao, highlight_vbo;
   Cursor* cursor;
@@ -50,10 +49,6 @@ class State {
   int round = 0;
   int fontSize;
   State() {}
-
-  void invalidateCache() {
-    cacheValid = false;
-  }
 
   CursorEntry* hasEditedBuffer() {
     for(CursorEntry* cur : cursors) {
@@ -370,6 +365,7 @@ class State {
         return;
       std::string p = provider.lastProvidedFolder;
       miniBuf = create(e);
+      cursor->jumpEnd();
     } else if (mode == 25) {
        if(reverse) {
           if(round == 0)
@@ -450,11 +446,14 @@ class State {
     this->path = path;
     status = create(path);
     if(path.length()) {
+#ifndef __SWITCH__
       if(path == "-") {
         fileName = u"-(STDIN/OUT)";
         hasHighlighting = false;
         renderCoords();
-      } else {
+      } else
+#endif
+      {
         auto split = entry->cursor.split(path, "/");
         fileName = create(split[split.size() -1]);
         tryEnableHighlighting();

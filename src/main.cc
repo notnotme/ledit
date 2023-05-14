@@ -12,6 +12,9 @@
 #ifdef _WIN32
 #include <Windows.h>
 #endif
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 #include "la.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -25,10 +28,89 @@
 #include "highlighting.h"
 #include "languages.h"
 State* gState = nullptr;
+#ifdef __SWITCH__
+struct SoftKeyboard {
+  SwkbdAppearArg appearArg;
+  SwkbdInline keyboard;
+  SwkbdState state;
+  Vec2f position = {0.0f, 0.0f};
+  float scale = 0.9f;
+  float alpha = 0.9f;
+} softKeyboard;
+
+struct GamePad {
+  GLFWgamepadstate old;
+  GLFWgamepadstate current;
+  double lastPressed;
+  double repeatDelay = 0.08;
+  double extraDelay = 0.1;
+} gamepad;
+
+double now;
+
+  bool isSoftkbdShown() {
+    return softKeyboard.state != SwkbdState_Initialized;
+  }
+
+  void strchange_cb(const char* str, SwkbdChangedStringArg* arg) {
+    gState->exitFlag = false;
+
+    bool invalidate = false;
+    if(gState->cursor->bind != nullptr) {
+      bool sameLength = gState->cursor->bind->length() == arg->stringLen;
+      if(!sameLength) {
+        gState->miniBuf = create(std::string(str));
+        gState->cursor->rebind(&gState->miniBuf);
+      }
+    } else {
+      std::u16string* current = &gState->cursor->lines[gState->cursor->y];
+      bool sameLength = current->length() == arg->stringLen;
+      if(!sameLength) {
+        invalidate = true;
+        std::u16string line = create(std::string(str));
+
+        gState->cursor->historyPush(30, arg->stringLen, *current);
+        gState->cursor->lines[gState->cursor->y] = line;
+      }
+    }
+
+    int x = (arg->cursorPos & 0x00ff);
+    if(x >= 0 && x <= arg->stringLen) {
+      gState->cursor->x = x;
+      if (gState->mode == 0) {
+       gState->renderCoords();
+      }
+    }
+  }
+
+  void movedcursor_cb(const char* str, SwkbdMovedCursorArg* arg) {
+      gState->exitFlag = false;
+
+      int x = (arg->cursorPos & 0x00ff);
+      if(x >= 0 && x <= arg->stringLen) {
+        gState->cursor->x = x;
+        if (gState->mode == 0) {
+          gState->renderCoords();
+        }
+      }
+  }
+
+  void decidecancel_cb() {
+  }
+
+  void decidedenter_cb(const char* str, SwkbdDecidedEnterArg* arg) {
+    /*
+    if(gState->mode != 0 && arg->stringLen > 0) {
+      gState->inform(true, false);
+      gState->renderCoords();
+    }
+  */
+  }
+#endif
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
     if(gState != nullptr) {
-      gState->invalidateCache();
 #ifdef _WIN32
       float xscale, yscale;
       glfwGetWindowContentScale(window, &xscale, &yscale);
@@ -44,7 +126,6 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 void window_focus_callback(GLFWwindow* window, int focused) {
   if(!gState)
     return;
-  gState->invalidateCache();
   gState->focused = focused;
   if(focused) {
     gState->checkChanged();
@@ -53,8 +134,12 @@ void window_focus_callback(GLFWwindow* window, int focused) {
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
+#ifdef __SWITCH__
+    if (isSoftkbdShown())
+      return;
+    else
+#endif
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-      gState->invalidateCache();
       double xpos, ypos;
       glfwGetCursorPos(window, &xpos, &ypos);
       float xscale, yscale;
@@ -69,7 +154,7 @@ void character_callback(GLFWwindow* window, unsigned int codepoint)
 {
   if(gState == nullptr)
     return;
-  gState->invalidateCache();
+
   gState->exitFlag = false;
 #ifdef _WIN32
   bool ctrl_pressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
@@ -101,7 +186,7 @@ void character_callback(GLFWwindow* window, unsigned int codepoint)
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
   if(gState == nullptr) return;
-  gState->invalidateCache();
+
   if(key == GLFW_KEY_ESCAPE) {
     if(action == GLFW_PRESS) {
     if(gState->cursor->selection.active) {
@@ -262,10 +347,12 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         cursor->append('\n');
     }
     if(isPress && key == GLFW_KEY_TAB) {
-      if(gState->mode != 0)
+      if(gState->mode != 0) {
         gState->provideComplete(shift_pressed);
-      else
+        gState->cursor->jumpEnd();
+      } else {
         cursor->append(u"  ");
+      }
     }
     if(isPress && key == GLFW_KEY_BACKSPACE) {
       cursor->removeOne();
@@ -279,7 +366,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
   ShowWindow(GetConsoleWindow(), SW_HIDE);
 #endif
-    std::string initialPath = argc >=2 ?std::string(argv[1]) : "";
+    std::string initialPath = argc >=2 ?std::string(argv[1]) : "/";
     State state(1280, 720, 30);
     gState = &state;
     glfwInit();
@@ -314,9 +401,31 @@ int main(int argc, char** argv) {
     GLFWcursor* mouseCursor = glfwCreateStandardCursor(GLFW_IBEAM_CURSOR);
     glfwSetCursor(window, mouseCursor);
 
+#ifdef __SWITCH__
+    swkbdInlineCreate(&softKeyboard.keyboard);
+    swkbdInlineSetFinishedInitializeCallback(&softKeyboard.keyboard, nullptr);
+    swkbdInlineLaunchForLibraryApplet(&softKeyboard.keyboard, SwkbdInlineMode_AppletDisplay, 0);
+    swkbdInlineSetChangedStringCallback(&softKeyboard.keyboard, strchange_cb);
+    swkbdInlineSetMovedCursorCallback(&softKeyboard.keyboard, movedcursor_cb);
+    swkbdInlineSetDecidedEnterCallback(&softKeyboard.keyboard, decidedenter_cb);
+    swkbdInlineSetDecidedCancelCallback(&softKeyboard.keyboard, decidecancel_cb);
+    swkbdInlineSetVolume(&softKeyboard.keyboard, 0);
+    swkbdInlineSetFooterScalable(&softKeyboard.keyboard, true);
+    swkbdInlineSetKeytopTranslate(&softKeyboard.keyboard, softKeyboard.position.x, softKeyboard.position.y);
+    swkbdInlineSetKeytopAsFloating(&softKeyboard.keyboard, false);
+    swkbdInlineSetKeytopScale(&softKeyboard.keyboard, softKeyboard.scale);
+    swkbdInlineSetFooterBgAlpha(&softKeyboard.keyboard, softKeyboard.alpha);
+    swkbdInlineSetKeytopBgAlpha(&softKeyboard.keyboard, softKeyboard.alpha);
+    swkbdInlineUpdate(&softKeyboard.keyboard, &softKeyboard.state);
 
+    swkbdInlineMakeAppearArg(&softKeyboard.appearArg, SwkbdType_Normal);
+    softKeyboard.appearArg.dicFlag = 0;
+    softKeyboard.appearArg.returnButtonFlag = 0;
 
-
+    swkbdInlineUpdate(&softKeyboard.keyboard, &softKeyboard.state);
+    swkbdInlineAppear(&softKeyboard.keyboard, &softKeyboard.appearArg);
+    swkbdInlineDisappear(&softKeyboard.keyboard);
+#endif
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -346,14 +455,242 @@ int main(int argc, char** argv) {
     auto maxRenderWidth = 0;
     while (!glfwWindowShouldClose(window))
     {
-#ifndef __SWITCH__
-      // CPU usage stay at 100%. on Nintendo Switch, even by using
-      // glfwSwapBuffers(window); after glfwWaitEvents(); (GLFW Switch don't wait)
-      // CPU usage stay very low (1..6%) if we avoid doing this if case below.
-      if(state.cacheValid) {
-        glfwWaitEvents();
-        continue;
+#ifdef __SWITCH__
+      // Nintendo Switch need update software keyboard instance
+      now = glfwGetTime();
+      gamepad.old = gamepad.current;
+      glfwGetGamepadState(GLFW_JOYSTICK_1, &gamepad.current);
+      bool l1_pressed = gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER];
+      bool r1_pressed = gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER];
+      bool l2_pressed = gamepad.current.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.1f;
+      bool r2_pressed = gamepad.current.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.1f;
+      bool l1_old_pressed = gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER];
+      bool r1_old_pressed = gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER];
+      bool l2_old_pressed = gamepad.old.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.1f;
+      bool r2_old_pressed = gamepad.old.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.1f;
+
+      if (!isSoftkbdShown()) {
+        if (l2_pressed && (gState->mode != 1 && gState->mode != 2 && gState->mode != 4  && gState->mode != 5 && gState->mode != 6
+        && gState->mode != 7 && gState->mode != 15 && gState->mode != 25 && gState->mode != 30 && gState->mode != 36)) {
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP]) {
+            gState->exitFlag = false;
+            gState->cursor->jumpStart();
+            gState->renderCoords();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN]) {
+            gState->exitFlag = false;
+            gState->cursor->jumpEnd();
+            gState->renderCoords();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->advanceWord();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->advanceWordBackwards();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (r2_pressed  && !r2_old_pressed) {
+            gState->exitFlag = false;
+            gState->switchMode();
+          } else if (r1_pressed && !r1_old_pressed) {
+            gState->exitFlag = false;
+            gState->changeFont();
+          }
+        } else if (l1_pressed && (gState->mode != 1 && gState->mode != 2 && gState->mode != 4 && gState->mode != 6
+          && gState->mode != 25 && gState->mode != 30 && gState->mode != 36)) {
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] && gState->mode != 15 && gState->mode != 5) {
+            gState->exitFlag = false;
+            gState->cursor->gotoLine(1);
+            gState->renderCoords();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] && gState->mode != 15 && gState->mode != 5) {
+            gState->exitFlag = false;
+            gState->cursor->gotoLine(gState->cursor->lines.size());
+            gState->renderCoords();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] && gState->mode != 15) {
+            gState->exitFlag = false;
+            gState->switchBuffer();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] && gState->mode != 15 && gState->mode != 5) {
+              gState->deleteActive();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_A] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_A]) {
+            gState->exitFlag = false;
+            gState->tryPaste();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_B] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_B] && gState->mode != 15 && gState->mode != 5) {
+            gState->exitFlag = false;
+            gState->undo();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_X] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_X]) {
+            gState->exitFlag = false;
+            gState->tryCopy();
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_Y] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_Y]) {
+            gState->exitFlag = false;
+            gState->cut();
+          }
+          if (r2_pressed  && !r2_old_pressed && gState->mode != 15) {
+            gState->exitFlag = false;
+            gState->save();
+          } else if ((r1_pressed && !r1_old_pressed) && gState->mode != 15) {
+            gState->exitFlag = false;
+            gState->open();
+            gamepad.lastPressed = now + 1;
+          }
+        } else {
+          // No L1/L2
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->moveUp();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->moveDown();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->moveRight();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->moveLeft();
+            gState->renderCoords();
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_BACK] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_BACK]) {
+            gState->exitFlag = false;
+            gState->increaseFontSize(-2);
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_START] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_START]) {
+            gState->exitFlag = false;
+            gState->increaseFontSize(+2);
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_X] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_X]) {
+            gState->exitFlag = false;
+
+            std::string text;
+            if (state.cursor->bind != nullptr) text = convert_str(*state.cursor->bind);
+            else text = convert_str(state.cursor->lines[state.cursor->y]);
+            swkbdInlineSetInputText(&softKeyboard.keyboard, text.c_str());
+
+            swkbdInlineSetCursorPos(&softKeyboard.keyboard, state.cursor->x);
+            swkbdInlineAppear(&softKeyboard.keyboard, &softKeyboard.appearArg);
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_A] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            if(gState->mode != 0) {
+              gState->inform(true, false);
+                gamepad.lastPressed = now + gamepad.extraDelay;  // A bit more delay to avoid next keypress
+              } else {
+              gState->cursor->append('\n');
+              gState->renderCoords();
+              gamepad.lastPressed = now ;
+            }
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_Y] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+            gState->cursor->append(' ');
+            if(gState->mode == 0) {
+              gState->renderCoords();
+            }
+            gamepad.lastPressed = now;
+          }
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_B] && (gamepad.lastPressed + gamepad.repeatDelay) < now) {
+            gState->exitFlag = false;
+
+            if(gState->mode != 0) {
+              gState->inform(false, false);
+              gamepad.lastPressed = now + gamepad.extraDelay;  // A bit more delay to avoid next keypress
+            } else {
+              gState->cursor->removeOne();
+              gState->renderCoords();
+              gamepad.lastPressed = now; 
+            }
+          }
+          if (l2_pressed && !l2_old_pressed) {
+            gState->exitFlag = false;
+            if(gState->mode == 1 || gState->mode == 4 || gState->mode == 5 || gState->mode == 15 || gState->mode == 25) {
+              gState->provideComplete(true);
+              std::string text = convert_str(gState->miniBuf);
+              swkbdInlineSetInputText(&softKeyboard.keyboard, text.c_str());
+              swkbdInlineSetCursorPos(&softKeyboard.keyboard, gState->cursor->x);
+            }
+          }
+          if (r2_pressed  && !r2_old_pressed) {
+            gState->exitFlag = false;
+            if(gState->mode == 1 || gState->mode == 4 || gState->mode == 5 || gState->mode == 15 || gState->mode == 25) {
+              gState->provideComplete(false);
+              std::string text = convert_str(gState->miniBuf);
+              swkbdInlineSetInputText(&softKeyboard.keyboard, text.c_str());
+              swkbdInlineSetCursorPos(&softKeyboard.keyboard, gState->cursor->x);
+            } else {
+              gState->toggleSelection();
+            }
+          }
+          if (r1_pressed && !r1_old_pressed) {
+            gState->exitFlag = false;
+            gState->search();
+          }
+
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB] && !gamepad.old.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB]) {
+            CursorEntry* edited = gState->hasEditedBuffer();
+            if(gState->exitFlag || edited == nullptr) {
+              glfwSetWindowShouldClose(window, true);
+            } else {
+              gState->exitFlag = true;
+              gState->status = create(edited->path.length() ? edited->path : "New File") + u" edited, press ESC again to exit";
+            }
+          }
+        }
+      } else {
+        // Keyboard shown
+        //swkbdInlineSetDirectionalButtonAssignFlag(&softKeyboard.keyboard, false);
+        if (l2_pressed && !l2_old_pressed) {
+          if (gState->mode == 1 || gState->mode == 4 || gState->mode == 5 || gState->mode == 15 || gState->mode == 25) {
+            gState->provideComplete(true);
+            std::string text = convert_str(gState->miniBuf);
+            swkbdInlineSetInputText(&softKeyboard.keyboard, text.c_str());
+            swkbdInlineSetCursorPos(&softKeyboard.keyboard, gState->cursor->x);
+          }
+        } else if (l2_pressed) {
+          // Crappy port don't use dt time :)
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP]) softKeyboard.position.y += 0.01f;
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN]) softKeyboard.position.y -= 0.01f;
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT]) softKeyboard.position.x -= 0.01f;
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT]) softKeyboard.position.x += 0.01f;
+          swkbdInlineSetKeytopTranslate(&softKeyboard.keyboard, softKeyboard.position.x, softKeyboard.position.y);
+          //swkbdInlineSetDirectionalButtonAssignFlag(&softKeyboard.keyboard, true);
+       }
+        
+        if (r2_pressed && !r2_old_pressed) {
+          if (gState->mode == 1 || gState->mode == 4 || gState->mode == 5 || gState->mode == 15 || gState->mode == 25) {
+            gState->provideComplete(false);
+            std::string text = convert_str(gState->miniBuf);
+            swkbdInlineSetInputText(&softKeyboard.keyboard, text.c_str());
+            swkbdInlineSetCursorPos(&softKeyboard.keyboard, gState->cursor->x);
+          }
+        } else if (r2_pressed) {
+          // Crappy port don't use dt time :)
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP]) softKeyboard.scale += 0.01f;
+          if (gamepad.current.buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN]) softKeyboard.scale -= 0.01f;
+          swkbdInlineSetKeytopScale(&softKeyboard.keyboard, softKeyboard.scale);
+          //swkbdInlineSetDirectionalButtonAssignFlag(&softKeyboard.keyboard, true);
+       }
       }
+      swkbdInlineUpdate(&softKeyboard.keyboard, &softKeyboard.state);
 #endif
 
       bool changed = false;
@@ -711,9 +1048,12 @@ int main(int argc, char** argv) {
 
 
       glfwSwapBuffers(window);
-      state.cacheValid = true;
       glfwWaitEvents();
     }
+#ifdef __SWITCH__
+      // Nintendo Switch release software keyboard
+      swkbdInlineClose(&softKeyboard.keyboard);
+#endif
     glfwTerminate();
   return 0;
 };

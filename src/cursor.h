@@ -245,6 +245,9 @@ class Cursor {
     }
     return offset;
   }
+  void rebind(std::u16string* entry) {
+    bind = entry;
+  }
   void bindTo(std::u16string* entry, bool useXSave = false) {
     bind = entry;
     xSave = x;
@@ -641,6 +644,7 @@ class Cursor {
   }
 
    Cursor(std::string path) {
+#ifndef __SWITCH__
      if (path == "-") {
        std::string line;
        while (std::getline(std::cin, line)) {
@@ -648,6 +652,7 @@ class Cursor {
        }
        return;
      }
+#endif
      std::stringstream ss;
      std::ifstream stream(path);
      if(!stream.is_open()) {
@@ -1019,6 +1024,7 @@ void appendWithLines(std::u16string content) {
   bool saveTo(std::string path) {
     if(!hasEnding(path, ".md"))
       trimTrailingWhiteSpaces();
+#ifndef __SWITCH__
     if(path == "-") {
       auto& stream = std::cout;
       for(size_t i = 0; i < lines.size(); i++) {
@@ -1029,6 +1035,7 @@ void appendWithLines(std::u16string content) {
       exit(0);
       return true;
     }
+#endif
     std::ofstream stream(path, std::ofstream::out);
     if(!stream.is_open()) {
       return false;

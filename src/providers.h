@@ -21,7 +21,7 @@ struct FontEntry {
 #ifdef __SWITCH__
 long pathconf(const char *pathname, int varcode) {
   //stub
-  return 0L;
+  return varcode;
 }
 #endif
 namespace fs = std::filesystem;
@@ -52,7 +52,11 @@ public:
   Provider() {
     fs::path* homeDir = getHomeFolder();
     if(homeDir) {
+#ifdef __SWITCH__
+      fs::path configDir = "sdmc:/switch/ledit";
+#else
       fs::path configDir = *homeDir / ".ledit";
+#endif
       if(fs::exists(configDir)) {
          fs::path configFile = configDir / "config.json";
             configPath = configFile.generic_string();
@@ -216,7 +220,7 @@ public:
 #elif __APPLE__
   return "/System/Library/Fonts";
 #elif __SWITCH__
-  return "/switch/ledit/fonts";
+  return "sdmc:/switch/ledit/fonts";
 #else
   // fontconfig used
   return "";
@@ -278,7 +282,7 @@ public:
     return folderEntries[offset];
   }
 std::string getFileToOpen(std::string path, bool reverse) {
-  if(!fs::exists(path) || !fs::is_directory(path))
+  if(!path.length() || !fs::exists(path) || !fs::is_directory(path))
     return "";
   if(lastProvidedFolder == path) {
     offset += reverse ? -1 : 1;
@@ -301,7 +305,9 @@ private:
   fs::path* getHomeFolder() {
 #ifdef _WIN32
     const char* home = getenv("USERPROFILE");
-#else
+#elif __SWITCH__
+    const char* home = "sdmc:";
+#else 
     const char* home = getenv("HOME");
 #endif
     if(home)
